@@ -21,40 +21,40 @@ import (
 
 // See https://microsoft.github.io/language-server-protocol/specifications/lsp/3.18/specification/#textDocument_completion
 func (s *Server) textDocumentCompletion(params *CompletionParams) ([]CompletionItem, error) {
-	result, spxFile, astFile, err := s.compileAndGetASTFileForDocumentURI(params.TextDocument.URI)
+	ctx, err := s.Context(params.TextDocument.URI, params.Position)
 	if err != nil {
 		return nil, err
 	}
-	if astFile == nil {
+	if ctx.Ast == nil {
 		return nil, nil
 	}
 
-	pos := result.posAt(astFile, params.Position)
+	pos := s.posAt(ctx)
 	if !pos.IsValid() {
 		return nil, nil
 	}
-	innermostScope := result.innermostScopeAt(pos)
+	innermostScope := s.innermostScopeAt(ctx, pos)
 	if innermostScope == nil {
 		return nil, nil
 	}
 
-	proj := result.proj
-	ctx := &completionContext{
-		proj:           s.getProj(),
+	proj := s.getProj()
+	cctx := &completionContext{
+		ctx:            ctx,
+		proj:           proj,
 		itemSet:        newCompletionItemSet(),
-		result:         result,
-		spxFile:        spxFile,
-		astFile:        astFile,
-		astFileScope:   getTypeInfo(proj).Scopes[astFile],
-		tokenFile:      proj.Fset.File(astFile.Pos()),
+		spxFile:        ctx.File,
+		astFile:        ctx.Ast,
+		astFileScope:   getTypeInfo(proj).Scopes[ctx.Ast],
+		tokenFile:      proj.Fset.File(ctx.Ast.Pos()),
 		pos:            pos,
 		innermostScope: innermostScope,
 	}
-	ctx.analyze()
-	if err := ctx.collect(); err != nil {
+	cctx.analyze()
+	if err := cctx.collect(); err != nil {
 		return nil, fmt.Errorf("failed to collect completion items: %w", err)
 	}
-	return ctx.sortedItems(), nil
+	return cctx.sortedItems(), nil
 }
 
 // completionKind represents different kinds of completion contexts.
@@ -80,8 +80,8 @@ const (
 type completionContext struct {
 	itemSet *completionItemSet
 
+	ctx            *Context
 	proj           *gop.Project
-	result         *compileResult
 	spxFile        string
 	astFile        *gopast.File
 	astFileScope   *types.Scope
@@ -105,7 +105,7 @@ type completionContext struct {
 }
 
 func (ctx *completionContext) pkgDoc() *pkgdoc.PkgDoc {
-	return getPkgDoc(ctx.proj)
+	return ctx.ctx.Doc
 }
 
 // analyze analyzes the completion context to determine the kind of completion needed.
@@ -149,7 +149,7 @@ func (ctx *completionContext) analyze() {
 						ctx.expectedTypes = []types.Type{tv.Type}
 					}
 					if ident, ok := node.Lhs[j].(*gopast.Ident); ok {
-						defIdent := ctx.result.defIdentFor(typeInfo.ObjectOf(ident))
+						defIdent := .defIdentFor(typeInfo.ObjectOf(ident))
 						if defIdent != nil {
 							ctx.assignTargets = append(ctx.assignTargets, defIdent)
 						}
@@ -810,7 +810,7 @@ func (ctx *completionContext) collectStructLit() error {
 			continue
 		}
 
-		selectorTypeName := ctx.result.selectorTypeNameForIdent(ctx.result.defIdentFor(field))
+		selectorTypeName := ctx.result.selectorTypeNameForIdent(ctx.ctx.defIdentFor(field))
 		forceVar := ctx.result.isDefinedInFirstVarBlock(field)
 		spxDef := GetSpxDefinitionForVar(field, selectorTypeName, forceVar, ctx.pkgDoc())
 		spxDef.CompletionItemInsertText = field.Name() + ": ${1:}"

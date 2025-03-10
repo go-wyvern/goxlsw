@@ -1516,3 +1516,57 @@ func (s *Server) inspectSpxWidgetResourceRefAtExpr(result *compileResult, expr g
 	}
 	return spxWidgetResource
 }
+
+// posAt returns the [goptoken.Pos] of the given position in the given AST file.
+func (s *Server) posAt(ctx *Context) goptoken.Pos {
+	proj := s.getProj()
+	tokenFile := proj.Fset.File(ctx.Ast.Pos())
+	if int(ctx.Pos.Line) > tokenFile.LineCount()-1 {
+		return goptoken.Pos(tokenFile.Base() + tokenFile.Size()) // EOF
+	}
+	return tokenFile.Pos(s.toPosition(ctx.Ast, ctx.Pos).Offset)
+}
+
+// toPosition converts a protocol [Position] to a [goptoken.Position].
+func (s *Server) toPosition(astFile *gopast.File, position Position) goptoken.Position {
+	proj := s.getProj()
+	tokenFile := proj.Fset.File(astFile.Pos())
+
+	line := min(int(position.Line)+1, tokenFile.LineCount())
+	lineStart := int(tokenFile.LineStart(line))
+	relLineStart := lineStart - tokenFile.Base()
+	lineContent := astFile.Code[relLineStart:]
+	if i := bytes.IndexByte(lineContent, '\n'); i >= 0 {
+		lineContent = lineContent[:i]
+	}
+	utf8Offset := utf16OffsetToUTF8(string(lineContent), int(position.Character))
+	column := utf8Offset + 1
+
+	return goptoken.Position{
+		Filename: tokenFile.Name(),
+		Offset:   relLineStart + utf8Offset,
+		Line:     line,
+		Column:   column,
+	}
+}
+
+// innermostScopeAt returns the innermost scope that contains the given
+// position. It returns nil if not found.
+func (s *Server) innermostScopeAt(ctx *Context, pos goptoken.Pos) *types.Scope {
+	proj := s.getProj()
+	typeInfo := getTypeInfo(proj)
+
+	fileScope := typeInfo.Scopes[ctx.Ast]
+	if fileScope == nil {
+		return nil
+	}
+	innermostScope := fileScope
+	for _, scope := range typeInfo.Scopes {
+		if scope.Contains(pos) && fileScope.Contains(scope.Pos()) && innermostScope.Contains(scope.Pos()) {
+			innermostScope = scope
+		}
+	}
+	return innermostScope
+}
+
+// -----------------------------------------------------------------------------
