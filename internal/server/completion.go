@@ -40,7 +40,7 @@ func (s *Server) textDocumentCompletion(params *CompletionParams) ([]CompletionI
 
 	proj := s.getProj()
 	cctx := &completionContext{
-		ctx:            ctx,
+		svr:            s,
 		proj:           proj,
 		itemSet:        newCompletionItemSet(),
 		spxFile:        ctx.File,
@@ -80,6 +80,7 @@ const (
 type completionContext struct {
 	itemSet *completionItemSet
 
+	svr            *Server
 	ctx            *Context
 	proj           *gop.Project
 	spxFile        string
@@ -110,7 +111,7 @@ func (ctx *completionContext) pkgDoc() *pkgdoc.PkgDoc {
 
 // analyze analyzes the completion context to determine the kind of completion needed.
 func (ctx *completionContext) analyze() {
-	typeInfo := getTypeInfo(ctx.proj)
+	typeInfo := ctx.ctx.Info
 	path, _ := util.PathEnclosingInterval(ctx.astFile, ctx.pos-1, ctx.pos)
 	for i, node := range slices.Backward(path) {
 		switch node := node.(type) {
@@ -149,7 +150,7 @@ func (ctx *completionContext) analyze() {
 						ctx.expectedTypes = []types.Type{tv.Type}
 					}
 					if ident, ok := node.Lhs[j].(*gopast.Ident); ok {
-						defIdent := .defIdentFor(typeInfo.ObjectOf(ident))
+						defIdent := ctx.svr.defIdentFor(ctx.ctx, typeInfo.ObjectOf(ident))
 						if defIdent != nil {
 							ctx.assignTargets = append(ctx.assignTargets, defIdent)
 						}
@@ -221,7 +222,7 @@ func (ctx *completionContext) analyze() {
 		}
 	}
 
-	ctx.inSpxEventHandler = ctx.result.isInSpxEventHandler(ctx.pos)
+	ctx.inSpxEventHandler = ctx.svr.isInSpxEventHandler(ctx.pos)
 }
 
 // isInComment reports whether the position of the current completion context
@@ -410,14 +411,15 @@ func (ctx *completionContext) collectGeneral() error {
 			if !isExportedOrMainPkgObject(obj) {
 				continue
 			}
-			if defIdent := ctx.result.defIdentFor(obj); defIdent != nil && slices.Contains(ctx.assignTargets, defIdent) {
+			if defIdent := ctx.svr.defIdentFor(ctx.ctx, obj); defIdent != nil && slices.Contains(ctx.assignTargets, defIdent) {
 				continue
 			}
 
-			ctx.itemSet.addSpxDefs(ctx.result.spxDefinitionsFor(obj, "")...)
+			ctx.itemSet.addSpxDefs(ctx.svr.spxDefinitionsFor(obj, "")...)
 
 			isThis := name == "this"
-			isSpxFileMatch := ctx.spxFile == name+".spx" || (ctx.spxFile == ctx.result.mainSpxFile && name == "Game")
+			spxFileBaseName := path.Base(ctx.spxFile)
+			isSpxFileMatch := ctx.spxFile == name+".spx" || (spxFileBaseName == "main.spx" && name == "Game")
 			isMainScopeObj := isInMainScope && isSpxFileMatch
 			if !isThis && !isMainScopeObj {
 				continue
